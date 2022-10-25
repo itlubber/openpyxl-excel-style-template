@@ -1,6 +1,6 @@
 # python公共模块之openpyxl修改excel文件样式
 
-![python公共模块之openpyxl修改excel文件样式](https://itlubber.art/upload/2022/10/2022102501.png)
+![python公共模块之openpyxl修改excel文件样式](https://itlubber.art/upload/2022/10/2022102504.png)
 
 ## 概述
 
@@ -89,10 +89,14 @@ render_excel("变量字典及字段解释.xlsx")
 
 ## 渲染结果
 
-![正常使用样式](https://itlubber.art/upload/2022/10/2022102502.png)
 
+### 正常使用样式
 
-![特定场景下的渲染样式](https://itlubber.art/upload/2022/10/2022102501.png)
+<img src="https://itlubber.art/upload/2022/10/2022102502.png" style="height:90px;">
+
+### 特定场景下的渲染样式
+
+<img src="https://itlubber.art/upload/2022/10/2022102504.png">
 
 
 ## 代码说明

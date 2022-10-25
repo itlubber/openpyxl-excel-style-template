@@ -160,6 +160,41 @@ def itlubber_border(border, color):
         
 
 def render_excel(excel_name, sheet_name=None, conditional_columns=[], freeze=None, merge_rows=[], percent_columns=[], theme_color="2639E9", conditional_color="9980FA", font="楷体", fontsize=10, max_column_width=50):
+    """openpyxl对excel文件样式进行渲染
+    
+    对excel的首行填充主题色，字体设置白色，文本居中，外边框主题色，内边框白色
+    对excel除首行之外的内容行，填充白色，字体设置为黑色，同时设置边框颜色
+    可以冻结单元格、条件格式填充等
+
+    Parameters
+    ----------
+    excel_name : str
+        需要渲染的 excel 文件名称
+    sheet_name : str or list
+        需要渲染的 sheet 名称，可以不填，默认全部渲染
+    conditional_columns : list
+        需要填充条件格式的列
+    freeze: str
+        需要冻结的单元格
+    merge_rows: list
+        需要突出显示的单元格序号，从小到大
+    percent_columns: list
+        需要显示百分数的列
+    theme_color: str
+        主题色
+    conditional_color: str
+        条件格式填充的颜色
+    font: str
+        需要使用的字体
+    fontsize: int
+        字体大小
+    max_column_width: float
+        最大的列宽
+
+    Returns
+    -------
+    渲染好的 excel 文件
+    """
     workbook = load_workbook(excel_name)
     
     if sheet_name and isinstance(sheet_name, str):

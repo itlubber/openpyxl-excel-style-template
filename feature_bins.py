@@ -157,7 +157,7 @@ def itlubber_border(border, color):
             bottom=Side(border_style=border[2], color=color[2]),
             top=Side(border_style=border[3], color=color[3]),
         )
-        
+
 
 def render_excel(excel_name, sheet_name=None, conditional_columns=[], freeze=None, merge_rows=[], percent_columns=[], theme_color="2639E9", conditional_color="9980FA", font="楷体", fontsize=10, max_column_width=50):
     """openpyxl对excel文件样式进行渲染

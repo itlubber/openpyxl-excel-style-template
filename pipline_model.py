@@ -1,14 +1,20 @@
+import os
 import toad
 import warnings
 import numpy as np
 import pandas as pd
 import scorecardpy as sc
+import statsmodels.api as sm
 import matplotlib.pyplot as plt
+from openpyxl import load_workbook
+from openpyxl.styles import Alignment
 from sklearn.pipeline import Pipeline
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import GradientBoostingClassifier
 from toad.plot import bin_plot, proportion_plot, corr_plot, badrate_plot
 from sklearn.base import BaseEstimator, TransformerMixin, ClassifierMixin
+from statsmodels.stats.outliers_influence import variance_inflation_factor
 
 from feature_bins import *
 
@@ -172,6 +178,108 @@ class StepwiseSelection(TransformerMixin, BaseEstimator):
         return x[[col for col in self.select_columns if col in x.columns]]
     
     
+class LogisticClassifier(TransformerMixin, BaseEstimator):
+    
+    def __init__(self, target="target", intercept=True, ):
+        self.intercept = intercept
+        self.target = target
+        self.classifier = None
+        self.corr = None
+        self.vif = None
+        self.coef_normalization = None
+        self.feature_names_ = None
+        self.feature_importances_ = None
+    
+    def fit(self, x, y=None, vif=True, corr=True, normalization=True):
+        self.feature_names_ = list(x.drop(columns=[self.target]).columns)
+        self.feature_importances_ = self.feature_importances(x)
+        
+        if vif:
+            self.vif = self.VIF(x)
+            
+        if normalization:
+            _x = x.drop(columns=[self.target]).apply(lambda x: (x - np.mean(x)) / np.std(x))
+            _y = x[self.target]
+            lr_normalization = sm.Logit(_y, sm.add_constant(_x) if self.intercept else _x).fit()
+            self.coef_normalization = pd.DataFrame(lr_normalization.params, columns=["coef_normalization"])
+            
+        if corr:
+            self.corr = x.drop(columns=[self.target]).corr()
+            
+        if self.intercept:
+            x = sm.add_constant(x)
+        
+        self.classes_ = x[self.target].unique()
+        self.classifier = sm.Logit(x[self.target], x.drop(columns=[self.target])).fit()
+        
+        return self
+    
+    def transform(self, x):
+        if self.intercept:
+            x = sm.add_constant(x)
+        
+        return self.classifier.predict(x)
+    
+    def predict(self, x):
+        return self.transform(x)
+    
+    def summary(self):
+        describe = self.classifier.summary2()
+        return describe
+    
+    def feature_importances(self, x):
+        params = {
+            "n_estimators": 256,
+            "max_depth": 4,
+            "min_samples_split": 5,
+            "learning_rate": 1e-3,
+            "loss": "deviance",
+            "subsample": 0.9,
+        }
+        feature_importances_ = GradientBoostingClassifier(**params).fit(x.drop(columns=[self.target]), x[self.target]).feature_importances_
+        return pd.DataFrame(feature_importances_, index=self.feature_names_, columns=["feature_importances"])
+        
+    def VIF(self, x):
+        if self.intercept:
+            x = sm.add_constant(x)
+        
+        x = x.drop(columns=[target])
+        columns = x.columns
+        vif = pd.DataFrame({"VIF": [variance_inflation_factor(np.matrix(x), i) for i in range(len(columns))]}, index=columns)
+        
+        return vif
+    
+    def WALD(self):
+        return self.classifier.wald_test_terms().table[["statistic", "pvalue"]].rename(columns={"pvalue": "wald_test_pvalue", "statistic": "wald_test_statistic"})
+    
+    def report(self):
+        return self.classifier.summary2().tables[1].join([self.coef_normalization, self.WALD(), self.vif, self.feature_importances_]), self.classifier.summary2().tables[0], self.corr
+    
+    def summary_save(self, excel_name="逻辑回归模型拟合效果.xlsx", sheet_name="逻辑回归拟合效果"):
+        writer = pd.ExcelWriter(excel_name, engine='openpyxl')
+        
+        coef_report, summary_report, corr_report = self.report()
+        summary_report.columns = ["逻辑回归模型拟合效果"] * summary_report.shape[1]
+        summary_report.to_excel(writer, sheet_name=sheet_name, index=False, header=False, startcol=0, startrow=2)
+        coef_report.reset_index().rename(columns={"index": "variable"}).to_excel(writer, sheet_name=sheet_name, index=False, header=True, startcol=0, startrow=summary_report.shape[0] + 4)
+        corr_report.to_excel(writer, sheet_name=sheet_name, index=True, header=True, startcol=0, startrow=summary_report.shape[0] + coef_report.shape[0] + 7)
+        
+        writer.save()
+        writer.close()
+        
+        if os.path.exists(excel_name):
+            workbook = load_workbook(excel_name)
+            worksheet = workbook.get_sheet_by_name(sheet_name)
+            worksheet["A1"].value = "逻辑回归模型报告"
+            worksheet["A1"].alignment = Alignment(horizontal='center', vertical='center')
+            worksheet.merge_cells(f"A1:L1")
+            
+            workbook.save(excel_name)
+            workbook.close()
+        
+        render_excel(excel_name, sheet_name=sheet_name, max_column_width=25, merge_rows=np.cumsum([1, len(summary_report), 2, len(coef_report) + 1, 2, len(corr_report) + 1]).tolist())
+    
+    
 class ScoreCard(TransformerMixin, BaseEstimator, ClassifierMixin):
     
     def __init__(self, target="target", pdo=60, rate=2, base_odds=35, base_score=750, combiner={}, transer=None, penalty='l2', C=1.0, fit_intercept=True, class_weight="balanced", random_state=None, 
@@ -264,6 +372,7 @@ if __name__ == "__main__":
         ("transform", WOETransformer(target=target)),
         ("processing_select", FeatureSelection(target=target, engine="scorecardpy")),
         ("stepwise", StepwiseSelection(target=target, target_rm=False)),
+        # ("logistic", LogisticClassifier()),
         # ("stepwise", StepwiseSelection(target=target, target_rm=True)),
         # ("logistic", LogisticRegression()),
     ])
@@ -288,6 +397,10 @@ if __name__ == "__main__":
     
     woe_train = feature_pipeline.fit_transform(train)
     woe_test = feature_pipeline.transform(test)
+    
+    lr = LogisticClassifier(target=target)
+    lr.fit(woe_train)
+    lr.summary_save()
 
     cols = list(filter(lambda x: x != target, feature_pipeline.__getitem__(0).select_columns))
     combiner = feature_pipeline.__getitem__(1).combiner

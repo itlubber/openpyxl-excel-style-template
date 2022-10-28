@@ -247,7 +247,7 @@ class LogisticClassifier(TransformerMixin, BaseEstimator):
         if self.intercept:
             x = sm.add_constant(x)
         
-        x = x.drop(columns=[target])
+        x = x.drop(columns=[self.target])
         columns = x.columns
         vif = pd.DataFrame({"VIF": [variance_inflation_factor(np.matrix(x), i) for i in range(len(columns))]}, index=columns)
         

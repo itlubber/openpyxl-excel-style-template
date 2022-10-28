@@ -1,15 +1,19 @@
 import os
 import toad
+import scipy
 import warnings
 import numpy as np
 import pandas as pd
 import scorecardpy as sc
 import statsmodels.api as sm
 import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+from IPython.display import Image
 from openpyxl import load_workbook
 from openpyxl.styles import Alignment
 from sklearn.pipeline import Pipeline
 from sklearn.linear_model import LogisticRegression
+from sklearn.utils.validation import check_is_fitted
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import GradientBoostingClassifier
 from toad.plot import bin_plot, proportion_plot, corr_plot, badrate_plot
@@ -278,6 +282,202 @@ class LogisticClassifier(TransformerMixin, BaseEstimator):
             workbook.close()
         
         render_excel(excel_name, sheet_name=sheet_name, max_column_width=25, merge_rows=np.cumsum([1, len(summary_report), 2, len(coef_report) + 1, 2, len(corr_report) + 1]).tolist())
+        
+
+class ITLubberLogisticRegression(LogisticRegression):
+    """
+    Extended Logistic Regression.
+    Extends [sklearn.linear_model.LogisticRegression](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LogisticRegression.html).
+    This class provides the following extra statistics, calculated on `.fit()` and accessible via `.get_stats()`:
+    - `cov_matrix_`: covariance matrix for the estimated parameters.
+    - `std_err_intercept_`: estimated uncertainty for the intercept
+    - `std_err_coef_`: estimated uncertainty for the coefficients
+    - `z_intercept_`: estimated z-statistic for the intercept
+    - `z_coef_`: estimated z-statistic for the coefficients
+    - `p_value_intercept_`: estimated p-value for the intercept
+    - `p_value_coef_`: estimated p-value for the coefficients
+    Example:
+    ```python
+    pipeline = Pipeline([
+        ('bucketer', EqualFrequencyBucketer(n_bins=10)),
+        ('clf', LogisticRegression(calculate_stats=True))
+    ])
+    pipeline.fit(X, y)
+    pipeline.named_steps['clf'].get_stats()
+    ```
+    An example output of `.get_stats()`:
+    
+    Index     | Coef.     | Std.Err  |   z       | Pz
+    --------- | ----------| ---------| ----------| ------------
+    const     | -0.537571 | 0.096108 | -5.593394 | 2.226735e-08
+    EDUCATION | 0.010091  | 0.044874 | 0.224876  | 8.220757e-01
+    """
+
+    def __init__(self, target="target", penalty="l2", calculate_stats=True, dual=False, tol=0.0001, C=1.0, fit_intercept=True, intercept_scaling=1, class_weight=None, random_state=None, solver="lbfgs", max_iter=100, multi_class="auto", verbose=0, warm_start=False, n_jobs=None, l1_ratio=None,):
+        """
+        Extends [sklearn.linear_model.LogisticRegression.fit()](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LogisticRegression.html).
+        Args:
+            calculate_stats (bool): If true, calculate statistics like standard error during fit, accessible with .get_stats()
+        """
+        super().__init__(penalty=penalty, dual=dual, tol=tol, C=C, fit_intercept=fit_intercept, intercept_scaling=intercept_scaling, class_weight=class_weight, random_state=random_state, solver=solver, max_iter=max_iter, multi_class=multi_class, verbose=verbose, warm_start=warm_start, n_jobs=n_jobs, l1_ratio=l1_ratio,)
+        self.target = target
+        self.calculate_stats = calculate_stats
+
+    def fit(self, x, sample_weight=None, **kwargs):
+        y = x[self.target]
+        x = x.drop(columns=[self.target])
+        
+        if not self.calculate_stats:
+            return super().fit(x, y, sample_weight=sample_weight, **kwargs)
+
+        x = self.convert_sparse_matrix(x)
+        if isinstance(x, pd.DataFrame):
+            self.names_ = ["const"] + [f for f in x.columns]
+        else:
+            self.names_ = ["const"] + [f"x{i}" for i in range(x.shape[1])]
+
+        lr = super().fit(x, y, sample_weight=sample_weight, **kwargs)
+
+        predProbs = self.predict_proba(x)
+
+        # Design matrix -- add column of 1's at the beginning of your x matrix
+        if lr.fit_intercept:
+            x_design = np.hstack([np.ones((x.shape[0], 1)), x])
+        else:
+            x_design = x
+
+        p = np.product(predProbs, axis=1)
+        self.cov_matrix_ = np.linalg.inv((x_design * p[..., np.newaxis]).T @ x_design)
+        std_err = np.sqrt(np.diag(self.cov_matrix_)).reshape(1, -1)
+
+        # In case fit_intercept is set to True, then in the std_error array
+        # Index 0 corresponds to the intercept, from index 1 onwards it relates to the coefficients
+        # If fit intercept is False, then all the values are related to the coefficients
+        if lr.fit_intercept:
+
+            self.std_err_intercept_ = std_err[:, 0]
+            self.std_err_coef_ = std_err[:, 1:][0]
+
+            self.z_intercept_ = self.intercept_ / self.std_err_intercept_
+
+            # Get p-values under the gaussian assumption
+            self.p_val_intercept_ = scipy.stats.norm.sf(abs(self.z_intercept_)) * 2
+
+        else:
+            self.std_err_intercept_ = np.array([np.nan])
+            self.std_err_coef_ = std_err[0]
+
+            self.z_intercept_ = np.array([np.nan])
+
+            # Get p-values under the gaussian assumption
+            self.p_val_intercept_ = np.array([np.nan])
+
+        self.z_coef_ = self.coef_ / self.std_err_coef_
+        self.p_val_coef_ = scipy.stats.norm.sf(abs(self.z_coef_)) * 2
+
+        return self
+
+    def get_stats(self):
+        """
+        Puts the summary statistics of the fit() function into a pandas DataFrame.
+        Returns:
+            data (pandas DataFrame): The statistics dataframe, indexed by the column name
+        """
+        check_is_fitted(self)
+
+        if not hasattr(self, "std_err_coef_"):
+            msg = "Summary statistics were not calculated on .fit(). Options to fix:\n"
+            msg += "\t- Re-fit using .fit(X, y, calculate_stats=True)\n"
+            msg += "\t- Re-inititialize using LogisticRegression(calculate_stats=True)"
+            raise AssertionError(msg)
+
+        data = {
+            "Coef.": (self.intercept_.tolist() + self.coef_.tolist()[0]),
+            "Std.Err": (self.std_err_intercept_.tolist() + self.std_err_coef_.tolist()),
+            "z": (self.z_intercept_.tolist() + self.z_coef_.tolist()[0]),
+            "P>|z|": (self.p_val_intercept_.tolist() + self.p_val_coef_.tolist()[0]),
+        }
+        
+        stats = pd.DataFrame(data, index=self.names_)
+        stats["[ 0.025"] = stats["Coef."] - 1.96 * stats["Std.Err"]
+        stats["0.975 ]"] = stats["Coef."] + 1.96 * stats["Std.Err"]
+        
+        return stats
+    
+    @staticmethod
+    def convert_sparse_matrix(x):
+        """
+        Converts a sparse matrix to a numpy array.
+        This can prevent problems arising from, e.g. OneHotEncoder.
+        Args:
+            x: numpy array, sparse matrix
+        Returns:
+            numpy array of x
+        """
+        if scipy.sparse.issparse(x):
+            return x.toarray()
+        else:
+            return x
+
+    def plot_weights(self, format=None, scale=None, width=None, height=None):
+        """
+        Generates a weight plot(plotly chart) from `stats`
+        Example:
+        ```
+        pipeline = Pipeline([
+            ('bucketer', EqualFrequencyBucketer(n_bins=10)),
+            ('clf', LogisticRegression(calculate_stats=True))
+        ])
+        pipeline.fit(X, y)
+        stats = pipeline.named_steps['clf'].plot_weights()
+        ```
+        Args:
+            stats: The statistics to display
+            format: The format of the image, such as 'png'. The default None returns a plotly image.
+            scale: If format is specified, the scale of the image
+            width: If format is specified, the width of the image
+            height: If format is specified, the image of the image
+        """
+        stats = self.get_stats()
+        
+        fig = go.Figure()
+
+        fig.add_trace(
+            go.Scatter(
+                x=stats['Coef.'],
+                y=stats['Coef.'].index,
+                line=dict(color='#2639E9', width=2),
+                mode='markers',
+
+                error_x=dict(
+                    type='data',
+                    symmetric=False,
+                    array=stats['0.975 ]'] - stats['Coef.'],
+                    arrayminus=stats['Coef.'] - stats['[ 0.025'],
+                    color='#2639E9')
+            )
+        )
+
+        fig.add_shape(type="line",
+                    x0=0, y0=0, x1=0, y1=len(stats),
+                    line=dict(color="#a29bfe", width=3, dash='dash')
+                    )
+
+        fig.update_layout(
+            title='Regression Meta Analysis - Weight Plot',
+            xaxis_title='Weight Estimates',
+            yaxis_title='Variable',
+            xaxis_showgrid=False,
+            yaxis_showgrid=False
+        )
+        
+        fig.update_layout(template="simple_white")
+
+        if format is not None:
+            img_bytes = fig.to_image(format=format, scale=scale, width=width, height=height)
+            fig = Image(img_bytes)
+            
+        return fig
     
     
 class ScoreCard(TransformerMixin, BaseEstimator, ClassifierMixin):

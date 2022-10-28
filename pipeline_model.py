@@ -14,7 +14,7 @@ from openpyxl.styles import Alignment
 from sklearn.pipeline import Pipeline
 from sklearn.linear_model import LogisticRegression
 from sklearn.utils.validation import check_is_fitted
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.ensemble import GradientBoostingClassifier
 from toad.plot import bin_plot, proportion_plot, corr_plot, badrate_plot
 from sklearn.base import BaseEstimator, TransformerMixin, ClassifierMixin
@@ -219,6 +219,9 @@ class LogisticClassifier(TransformerMixin, BaseEstimator):
         return self
     
     def transform(self, x):
+        if self.target in x.columns:
+            x = x.drop(columns=[self.target])
+            
         if self.intercept:
             x = sm.add_constant(x)
         
@@ -288,7 +291,7 @@ class ITLubberLogisticRegression(LogisticRegression):
     """
     Extended Logistic Regression.
     Extends [sklearn.linear_model.LogisticRegression](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LogisticRegression.html).
-    This class provides the following extra statistics, calculated on `.fit()` and accessible via `.get_stats()`:
+    This class provides the following extra statistics, calculated on `.fit()` and accessible via `.summary()`:
     - `cov_matrix_`: covariance matrix for the estimated parameters.
     - `std_err_intercept_`: estimated uncertainty for the intercept
     - `std_err_coef_`: estimated uncertainty for the coefficients
@@ -303,9 +306,9 @@ class ITLubberLogisticRegression(LogisticRegression):
         ('clf', LogisticRegression(calculate_stats=True))
     ])
     pipeline.fit(X, y)
-    pipeline.named_steps['clf'].get_stats()
+    pipeline.named_steps['clf'].summary()
     ```
-    An example output of `.get_stats()`:
+    An example output of `.summary()`:
     
     Index     | Coef.     | Std.Err  |   z       | Pz
     --------- | ----------| ---------| ----------| ------------
@@ -317,7 +320,7 @@ class ITLubberLogisticRegression(LogisticRegression):
         """
         Extends [sklearn.linear_model.LogisticRegression.fit()](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LogisticRegression.html).
         Args:
-            calculate_stats (bool): If true, calculate statistics like standard error during fit, accessible with .get_stats()
+            calculate_stats (bool): If true, calculate statistics like standard error during fit, accessible with .summary()
         """
         super().__init__(penalty=penalty, dual=dual, tol=tol, C=C, fit_intercept=fit_intercept, intercept_scaling=intercept_scaling, class_weight=class_weight, random_state=random_state, solver=solver, max_iter=max_iter, multi_class=multi_class, verbose=verbose, warm_start=warm_start, n_jobs=n_jobs, l1_ratio=l1_ratio,)
         self.target = target
@@ -377,7 +380,7 @@ class ITLubberLogisticRegression(LogisticRegression):
 
         return self
 
-    def get_stats(self):
+    def summary(self):
         """
         Puts the summary statistics of the fit() function into a pandas DataFrame.
         Returns:
@@ -438,7 +441,7 @@ class ITLubberLogisticRegression(LogisticRegression):
             width: If format is specified, the width of the image
             height: If format is specified, the image of the image
         """
-        stats = self.get_stats()
+        stats = self.summary()
         
         fig = go.Figure()
 
@@ -544,7 +547,7 @@ class ScoreCard(TransformerMixin, BaseEstimator, ClassifierMixin):
             show_plot = show_plot,
             return_distr_dat = return_distr_dat,
         )
-    
+
 
 if __name__ == "__main__":
     target = "creditability"
@@ -569,20 +572,24 @@ if __name__ == "__main__":
     feature_pipeline = Pipeline([
         ("preprocessing_select", FeatureSelection(target=target, engine="scorecardpy")),
         ("combiner", Combiner(target=target, min_samples=0.2)),
-        ("transform", WOETransformer(target=target)),
+        ("transformer", WOETransformer(target=target)),
         ("processing_select", FeatureSelection(target=target, engine="scorecardpy")),
         ("stepwise", StepwiseSelection(target=target, target_rm=False)),
-        # ("logistic", LogisticClassifier()),
-        # ("stepwise", StepwiseSelection(target=target, target_rm=True)),
-        # ("logistic", LogisticRegression()),
+        ("logistic", LogisticClassifier(target=target)),
+        # ("logistic", ITLubberLogisticRegression(target=target)),
     ])
+    
+    feature_pipeline.fit(train)
+    y_pred_train = feature_pipeline.predict(train.drop(columns=target))
+    y_pred_test = feature_pipeline.predict(test.drop(columns=target))
 
     # params_grid = {
-    #     "logistic__C": [i / 1. for i in range(1, 10, 2)],
-    #     "logistic__penalty": ["l2"],
-    #     "logistic__class_weight": [None, "balanced"], # + [{1: i / 10.0, 0: 1 - i / 10.0} for i in range(1, 10)],
-    #     "logistic__max_iter": [100],
-    #     "logistic__solver": ["sag"] # ["liblinear", "sag", "lbfgs", "newton-cg"],
+    #     # "logistic__C": [i / 1. for i in range(1, 10, 2)],
+    #     # "logistic__penalty": ["l2"],
+    #     # "logistic__class_weight": [None, "balanced"], # + [{1: i / 10.0, 0: 1 - i / 10.0} for i in range(1, 10)],
+    #     # "logistic__max_iter": [100],
+    #     # "logistic__solver": ["sag"] # ["liblinear", "sag", "lbfgs", "newton-cg"],
+    #     "logistic__intercept": [True, False],
     # }
     
     # clf = GridSearchCV(feature_pipeline, params_grid, cv=5, scoring='roc_auc', verbose=-1, n_jobs=2, return_train_score=True)
@@ -592,58 +599,62 @@ if __name__ == "__main__":
     # y_pred_test = clf.best_estimator_.predict(test)
     
     # print(clf.best_params_)
-    # print("train: ", toad.metrics.KS(y_pred_train, train[target]), toad.metrics.AUC(y_pred_train, train[target]))
-    # print("test: ", toad.metrics.KS(y_pred_test, test[target]), toad.metrics.AUC(y_pred_test, test[target]))
     
-    woe_train = feature_pipeline.fit_transform(train)
-    woe_test = feature_pipeline.transform(test)
+    # statmodels methods
+    # feature_pipeline.named_steps['logistic'].summary_save()
     
-    lr = LogisticClassifier(target=target)
-    lr.fit(woe_train)
-    lr.summary_save()
-
-    cols = list(filter(lambda x: x != target, feature_pipeline.__getitem__(0).select_columns))
-    combiner = feature_pipeline.__getitem__(1).combiner
-    transformer = feature_pipeline.__getitem__(2).transformer
+    print("train: ", toad.metrics.KS(y_pred_train, train[target]), toad.metrics.AUC(y_pred_train, train[target]))
+    print("test: ", toad.metrics.KS(y_pred_test, test[target]), toad.metrics.AUC(y_pred_test, test[target]))
     
-    feature_describe = pd.read_excel("变量字典及字段解释.xlsx", sheet_name="数据字段表", header=0, engine="openpyxl", usecols=[0, 1])
-    feature_describe = feature_describe.drop_duplicates(subset=["变量名称"], keep="last")
-    feature_dict = dict(zip(feature_describe["变量名称"], feature_describe["含义"]))
+    # woe_train = feature_pipeline.fit_transform(train)
+    # woe_test = feature_pipeline.transform(test)
+    
+    # lr = LogisticClassifier(target=target)
+    # lr.fit(woe_train)
+    # lr.summary_save()
 
-    # 保存结果至 EXCEL 文件
-    output_excel_name = "指标有效性验证.xlsx"
-    output_sheet_name = "指标有效性"
-    tables = {}
-    merge_row_number = []
+    # cols = list(filter(lambda x: x != target, feature_pipeline.named_steps['preprocessing_select'].select_columns))
+    # combiner = feature_pipeline.named_steps['combiner'].combiner
+    # transformer = feature_pipeline.named_steps['transformer'].transformer
+    
+    # feature_describe = pd.read_excel("变量字典及字段解释.xlsx", sheet_name="数据字段表", header=0, engine="openpyxl", usecols=[0, 1])
+    # feature_describe = feature_describe.drop_duplicates(subset=["变量名称"], keep="last")
+    # feature_dict = dict(zip(feature_describe["变量名称"], feature_describe["含义"]))
 
-    for feature in cols:
-        table = feature_bin_stats(train, feature, feature_dict=feature_dict, rules={}, target=target)
-        df_psi = cal_psi(train[[feature, target]], test[[feature, target]], feature, combiner=combiner)
+    # # 保存结果至 EXCEL 文件
+    # output_excel_name = "指标有效性验证.xlsx"
+    # output_sheet_name = "指标有效性"
+    # tables = {}
+    # merge_row_number = []
+
+    # for feature in cols:
+    #     table = feature_bin_stats(train, feature, feature_dict=feature_dict, rules={}, target=target)
+    #     df_psi = cal_psi(train[[feature, target]], test[[feature, target]], feature, combiner=combiner)
         
-        table = table.merge(df_psi, on="分箱", how="left")
+    #     table = table.merge(df_psi, on="分箱", how="left")
         
-        feature_bin = combiner.export()[feature]
-        feature_bin_dict = format_bins(np.array(feature_bin))
-        table["分箱"] = table["分箱"].map(feature_bin_dict)
+    #     feature_bin = combiner.export()[feature]
+    #     feature_bin_dict = format_bins(np.array(feature_bin))
+    #     table["分箱"] = table["分箱"].map(feature_bin_dict)
         
-        merge_row_number.append(len(table))
-        tables[feature] = table
+    #     merge_row_number.append(len(table))
+    #     tables[feature] = table
 
-    merge_row_number = np.cumsum(merge_row_number).tolist()
-    feature_table = pd.concat(tables, ignore_index=True).round(6)
-    feature_table["分档WOE值"] = feature_table["分档WOE值"].fillna(np.inf)
-    feature_table.to_excel(output_excel_name, sheet_name=output_sheet_name, index=False, header=True, startcol=0, startrow=0)
+    # merge_row_number = np.cumsum(merge_row_number).tolist()
+    # feature_table = pd.concat(tables, ignore_index=True).round(6)
+    # feature_table["分档WOE值"] = feature_table["分档WOE值"].fillna(np.inf)
+    # feature_table.to_excel(output_excel_name, sheet_name=output_sheet_name, index=False, header=True, startcol=0, startrow=0)
 
-    render_excel(output_excel_name, sheet_name=output_sheet_name, conditional_columns=["J", "N"], freeze="D2", merge_rows=merge_row_number, percent_columns=[5, 7, 9, 10])
+    # render_excel(output_excel_name, sheet_name=output_sheet_name, conditional_columns=["J", "N"], freeze="D2", merge_rows=merge_row_number, percent_columns=[5, 7, 9, 10])
         
-    score_card = ScoreCard(target=target, combiner=combiner, transer=transformer, )
-    score_card.fit(woe_train)
+    # score_card = ScoreCard(target=target, combiner=combiner, transer=transformer, )
+    # score_card.fit(woe_train)
     
     
-    data["score"] = score_card.transform(data)
+    # data["score"] = score_card.transform(data)
     
-    print(score_card.KS_bucket(data["score"], data[target]))
-    pt = score_card.perf_eva(data["score"], data[target], title="train")
+    # print(score_card.KS_bucket(data["score"], data[target]))
+    # pt = score_card.perf_eva(data["score"], data[target], title="train")
     
-    print(score_card.KS(data["score"], data[target]), score_card.AUC(data["score"], data[target]))
+    # print(score_card.KS(data["score"], data[target]), score_card.AUC(data["score"], data[target]))
     

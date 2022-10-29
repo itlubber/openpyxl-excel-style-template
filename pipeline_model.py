@@ -547,6 +547,17 @@ class ScoreCard(TransformerMixin, BaseEstimator, ClassifierMixin):
             show_plot = show_plot,
             return_distr_dat = return_distr_dat,
         )
+    
+    def score_hist(self, score, y_true, figsize=(15, 10), bins=20, alpha=0.6):
+        mask = y_true == 0
+        fig = plt.figure(figsize=figsize)
+        plt.hist(score[mask], label="好样本", color="#2639E9", alpha=alpha, bins=bins)
+        plt.hist(score[~mask], label="坏样本", color="#F76E6C", alpha=alpha, bins=bins)
+        plt.xlabel("score")
+        plt.legend()
+        plt.show()
+        
+        return fig
 
 
 if __name__ == "__main__":
@@ -575,13 +586,13 @@ if __name__ == "__main__":
         ("transformer", WOETransformer(target=target)),
         ("processing_select", FeatureSelection(target=target, engine="scorecardpy")),
         ("stepwise", StepwiseSelection(target=target, target_rm=False)),
-        ("logistic", LogisticClassifier(target=target)),
+        # ("logistic", LogisticClassifier(target=target)),
         # ("logistic", ITLubberLogisticRegression(target=target)),
     ])
     
-    feature_pipeline.fit(train)
-    y_pred_train = feature_pipeline.predict(train.drop(columns=target))
-    y_pred_test = feature_pipeline.predict(test.drop(columns=target))
+    # feature_pipeline.fit(train)
+    # y_pred_train = feature_pipeline.predict(train.drop(columns=target))
+    # y_pred_test = feature_pipeline.predict(test.drop(columns=target))
 
     # params_grid = {
     #     # "logistic__C": [i / 1. for i in range(1, 10, 2)],
@@ -603,19 +614,19 @@ if __name__ == "__main__":
     # statmodels methods
     # feature_pipeline.named_steps['logistic'].summary_save()
     
-    print("train: ", toad.metrics.KS(y_pred_train, train[target]), toad.metrics.AUC(y_pred_train, train[target]))
-    print("test: ", toad.metrics.KS(y_pred_test, test[target]), toad.metrics.AUC(y_pred_test, test[target]))
+    # print("train: ", toad.metrics.KS(y_pred_train, train[target]), toad.metrics.AUC(y_pred_train, train[target]))
+    # print("test: ", toad.metrics.KS(y_pred_test, test[target]), toad.metrics.AUC(y_pred_test, test[target]))
     
-    # woe_train = feature_pipeline.fit_transform(train)
-    # woe_test = feature_pipeline.transform(test)
+    woe_train = feature_pipeline.fit_transform(train)
+    woe_test = feature_pipeline.transform(test)
     
     # lr = LogisticClassifier(target=target)
     # lr.fit(woe_train)
     # lr.summary_save()
 
-    # cols = list(filter(lambda x: x != target, feature_pipeline.named_steps['preprocessing_select'].select_columns))
-    # combiner = feature_pipeline.named_steps['combiner'].combiner
-    # transformer = feature_pipeline.named_steps['transformer'].transformer
+    cols = list(filter(lambda x: x != target, feature_pipeline.named_steps['preprocessing_select'].select_columns))
+    combiner = feature_pipeline.named_steps['combiner'].combiner
+    transformer = feature_pipeline.named_steps['transformer'].transformer
     
     # feature_describe = pd.read_excel("变量字典及字段解释.xlsx", sheet_name="数据字段表", header=0, engine="openpyxl", usecols=[0, 1])
     # feature_describe = feature_describe.drop_duplicates(subset=["变量名称"], keep="last")
@@ -647,14 +658,16 @@ if __name__ == "__main__":
 
     # render_excel(output_excel_name, sheet_name=output_sheet_name, conditional_columns=["J", "N"], freeze="D2", merge_rows=merge_row_number, percent_columns=[5, 7, 9, 10])
         
-    # score_card = ScoreCard(target=target, combiner=combiner, transer=transformer, )
-    # score_card.fit(woe_train)
+    score_card = ScoreCard(target=target, combiner=combiner, transer=transformer, )
+    score_card.fit(woe_train)
     
     
-    # data["score"] = score_card.transform(data)
+    data["score"] = score_card.transform(data)
     
-    # print(score_card.KS_bucket(data["score"], data[target]))
-    # pt = score_card.perf_eva(data["score"], data[target], title="train")
+    print(score_card.KS_bucket(data["score"], data[target]))
+    pt = score_card.perf_eva(data["score"], data[target], title="train")
     
-    # print(score_card.KS(data["score"], data[target]), score_card.AUC(data["score"], data[target]))
+    sc = score_card.score_hist(data["score"], data[target])
+    
+    print(score_card.KS(data["score"], data[target]), score_card.AUC(data["score"], data[target]))
     

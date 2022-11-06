@@ -47,7 +47,6 @@ def format_bins(bins):
                 else:
                     keys_update.add(key)
             label = ','.join(keys_update)
-            print(label)
             l.append(label)
 
     return {i if b != "缺失值" else EMPTYBINS: b for i, b in enumerate(l)}
@@ -57,6 +56,7 @@ def feature_bin_stats(data, feature, combiner=None, target="target", rules={}, e
     # if combiner is None:
     #     combiner = toad.transform.Combiner()
     #     combiner.fit(data[[feature, target]], target, empty_separate=empty_separate, method=method, min_samples=min_samples)
+
     if len(set(data[feature].unique().tolist() + [np.nan])) < 4:
         splits = []
         for v in data[feature].unique():
@@ -64,7 +64,8 @@ def feature_bin_stats(data, feature, combiner=None, target="target", rules={}, e
                 splits.append(v)
 
         if str(data[feature].dtypes) in ["object", "string", "category"]:
-            rule = {feature: [[s] for s in splits] + [[np.nan]]}
+            rule = {feature: [[s] for s in splits]}
+            rule[feature].append([[np.nan]])
         else:
             rule = {feature: sorted(splits) + [np.nan]}
     else:
@@ -333,13 +334,14 @@ if __name__ == '__main__':
     data["test_a"].loc[0] = np.nan
     data["test_b"] = ""
     data["test_b"].loc[0] = np.nan
+    data["test_c"] = np.nan
     
-    data = data.replace("", np.nan)
+    # data = data.replace("", np.nan)
     
     train, test = train_test_split(data, test_size=0.3,)
     
     target = "target"
-    cols = ["test_a", "test_b", "status.of.existing.checking.account", "credit.amount"]
+    cols = ["test_a", "test_b", "test_c", "status.of.existing.checking.account", "credit.amount"]
     
     combiner = toad.transform.Combiner()
     # combiner.fit(data[cols + [target]], target, empty_separate=True, method="chi", min_samples=0.2)

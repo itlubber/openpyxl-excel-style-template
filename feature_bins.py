@@ -3,6 +3,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import scorecardpy as sc
+from datetime import datetime
 import matplotlib.pyplot as plt
 from optbinning import OptimalBinning
 from sklearn.model_selection import train_test_split
@@ -26,7 +27,6 @@ feature_dict = dict(zip(feature_describe["变量名称"], feature_describe["含�
 
 def format_bins(bins):
     if isinstance(bins, list): bins = np.array(bins)
-    
     EMPTYBINS = len(bins) if not isinstance(bins[0], (set, list, np.ndarray)) else -1
     
     l = []
@@ -40,41 +40,53 @@ def format_bins(bins):
         for keys in bins:
             keys_update = set()
             for key in keys:
-                if key == "nan":
+                if pd.isnull(key) or key == "nan":
                     keys_update.add("缺失值")
                 elif key.strip() == "":
                     keys_update.add("空字符串")
                 else:
                     keys_update.add(key)
             label = ','.join(keys_update)
+            print(label)
             l.append(label)
 
     return {i if b != "缺失值" else EMPTYBINS: b for i, b in enumerate(l)}
 
 
-def feature_bin_stats(data, feature, combiner=None, target="target", rules={}, empty_separate=True, method='chi', min_samples=0.15, feature_dict={}, cat_cols=[], max_n_bins=3, gamma=0.01):
+def feature_bin_stats(data, feature, combiner=None, target="target", rules={}, empty_separate=True, method='cart', min_samples=0.15, max_n_bins=3, gamma=0.01, monotonic_trend="auto_asc_desc", feature_dict={}):
     # if combiner is None:
     #     combiner = toad.transform.Combiner()
     #     combiner.fit(data[[feature, target]], target, empty_separate=empty_separate, method=method, min_samples=min_samples)
-    
-    try:
-        y = data[target]
-        if feature in cat_cols:
-            dtype = "categorical"
-            x = data[feature].astype("category").values
-        else:
-            dtype = "numerical"
-            x = data[feature].values
+    if len(set(data[feature].unique().tolist() + [np.nan])) < 4:
+        splits = []
+        for v in data[feature].unique():
+            if not pd.isnull(v):
+                splits.append(v)
 
-        _combiner = OptimalBinning(feature, dtype=dtype, max_n_bins=max_n_bins, monotonic_trend=method, gamma=gamma).fit(x, y)
-        if _combiner.status == "OPTIMAL":
-            rule = {feature: [s.tolist() if isinstance(s, np.ndarray) else s for s in _combiner.splits] + [[np.nan] if dtype == "categorical" else np.nan]}
+        if str(data[feature].dtypes) in ["object", "string", "category"]:
+            rule = {feature: [[s] for s in splits] + [[np.nan]]}
         else:
-            raise "OptimalBinning error"
-    except:
-        _combiner = toad.transform.Combiner()
-        _combiner.fit(data[[feature, target]], target, empty_separate=empty_separate, method=method, min_samples=min_samples)
-        rule = _combiner.export()
+            rule = {feature: sorted(splits) + [np.nan]}
+    else:
+        try:
+            y = data[target]
+            if str(data[feature].dtypes) in ["object", "string", "category"]:
+                dtype = "categorical"
+                x = data[feature].astype("category").values
+            else:
+                dtype = "numerical"
+                x = data[feature].values
+            _combiner = OptimalBinning(feature, dtype=dtype, max_n_bins=max_n_bins, monotonic_trend=monotonic_trend, gamma=gamma).fit(x, y)
+            if _combiner.status == "OPTIMAL":
+                rule = {feature: [s.tolist() if isinstance(s, np.ndarray) else s for s in _combiner.splits] + [[np.nan] if dtype == "categorical" else np.nan]}
+            else:
+                raise "OptimalBinning error"
+        except Exception as e:
+            if method not in ["dt", "chi", ]:
+                method = "chi"
+            _combiner = toad.transform.Combiner()
+            _combiner.fit(data[[feature, target]], target, empty_separate=empty_separate, method=method, min_samples=min_samples)
+            rule = _combiner.export()
 
     if combiner is None:
         combiner = toad.transform.Combiner()
@@ -91,7 +103,7 @@ def feature_bin_stats(data, feature, combiner=None, target="target", rules={}, e
     
     table = df_bin[[feature, target]].groupby([feature, target]).agg(len).unstack()
     table.columns.name = None
-    table = table.rename(columns = {0 : '好样本数', 1 : '坏样本数'})
+    table = table.rename(columns = {0 : '好样本数', 1 : '坏样本数'}).fillna(0)
     table["指标名称"] = feature
     table["指标含义"] = feature_dict.get(feature, "")
     table = table.reset_index().rename(columns={feature: "分箱"})
@@ -322,16 +334,18 @@ if __name__ == '__main__':
     data["test_b"] = ""
     data["test_b"].loc[0] = np.nan
     
+    data = data.replace("", np.nan)
+    
     train, test = train_test_split(data, test_size=0.3,)
     
     target = "target"
     cols = ["test_a", "test_b", "status.of.existing.checking.account", "credit.amount"]
     
     combiner = toad.transform.Combiner()
-    combiner.fit(data[cols + [target]], target, empty_separate=True, method="chi", min_samples=0.2)
+    # combiner.fit(data[cols + [target]], target, empty_separate=True, method="chi", min_samples=0.2)
     
     # 保存结果至 EXCEL 文件
-    output_excel_name = "指标有效性验证.xlsx"
+    output_excel_name = f"指标有效性验证-{datetime.now().strftime('%Y-%m-%d')}.xlsx"
     output_sheet_name = "指标有效性"
     tables = {}
     merge_row_number = []
@@ -357,4 +371,4 @@ if __name__ == '__main__':
     
     render_excel(output_excel_name, sheet_name=output_sheet_name, conditional_columns=["J", "N"], freeze="D2", merge_rows=merge_row_number, percent_columns=[5, 7, 9, 10])
     render_excel("变量字典及字段解释.xlsx")
-    
+    combiner.export(to_json=f"rules_{datetime.now().strftime('%Y-%m-%d')}.json")

@@ -132,4 +132,5 @@ dmypy.json
 .virtual_documents
 *.ipynb
 *.zip
-rules.json
+rules*.json
+指标有效性验证-*.xlsx

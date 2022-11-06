@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import scorecardpy as sc
 import matplotlib.pyplot as plt
+from optbinning import OptimalBinning
 from sklearn.model_selection import train_test_split
 
 from openpyxl import load_workbook
@@ -26,6 +27,8 @@ feature_dict = dict(zip(feature_describe["变量名称"], feature_describe["含�
 def format_bins(bins):
     if isinstance(bins, list): bins = np.array(bins)
     
+    EMPTYBINS = len(bins) if not isinstance(bins[0], (set, list, np.ndarray)) else -1
+    
     l = []
     if np.issubdtype(bins.dtype, np.number):
         has_empty = len(bins) > 0 and np.isnan(bins[-1])
@@ -46,13 +49,37 @@ def format_bins(bins):
             label = ','.join(keys_update)
             l.append(label)
 
-    return {i: b for i, b in enumerate(l)}
+    return {i if b != "缺失值" else EMPTYBINS: b for i, b in enumerate(l)}
 
 
-def feature_bin_stats(data, feature, combiner=None, target="target", rules={}, empty_separate=True, method='chi', min_samples=0.2, feature_dict={}):
+def feature_bin_stats(data, feature, combiner=None, target="target", rules={}, empty_separate=True, method='chi', min_samples=0.15, feature_dict={}, cat_cols=[], max_n_bins=3, gamma=0.01):
+    # if combiner is None:
+    #     combiner = toad.transform.Combiner()
+    #     combiner.fit(data[[feature, target]], target, empty_separate=empty_separate, method=method, min_samples=min_samples)
+    
+    try:
+        y = data[target]
+        if feature in cat_cols:
+            dtype = "categorical"
+            x = data[feature].astype("category").values
+        else:
+            dtype = "numerical"
+            x = data[feature].values
+
+        _combiner = OptimalBinning(feature, dtype=dtype, max_n_bins=max_n_bins, monotonic_trend=method, gamma=gamma).fit(x, y)
+        if _combiner.status == "OPTIMAL":
+            rule = {feature: [s.tolist() if isinstance(s, np.ndarray) else s for s in _combiner.splits] + [[np.nan] if dtype == "categorical" else np.nan]}
+        else:
+            raise "OptimalBinning error"
+    except:
+        _combiner = toad.transform.Combiner()
+        _combiner.fit(data[[feature, target]], target, empty_separate=empty_separate, method=method, min_samples=min_samples)
+        rule = _combiner.export()
+
     if combiner is None:
         combiner = toad.transform.Combiner()
-        combiner.fit(data[[feature, target]], target, empty_separate=empty_separate, method=method, min_samples=min_samples)
+    
+    combiner.update(rule)
     
     if rules and isinstance(rules, list): rules = {feature: rules}
     if rules and isinstance(rules, dict): combiner.update(rules)
@@ -310,7 +337,7 @@ if __name__ == '__main__':
     merge_row_number = []
 
     for feature in cols:
-        table = feature_bin_stats(train, feature, feature_dict=feature_dict, rules={})
+        table = feature_bin_stats(train, feature, feature_dict=feature_dict, rules={}, combiner=combiner)
         df_psi = cal_psi(train[[feature, target]], test[[feature, target]], feature, combiner=combiner)
         
         table = table.merge(df_psi, on="分箱", how="left")
